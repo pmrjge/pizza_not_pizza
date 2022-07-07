@@ -21,12 +21,12 @@ import optax
 def load_images_from_folder(folder):
     images = []
     for filename in os.listdir(folder):
-        img = cv2.imread(os.path.join(folder, filename))
+        img = cv2.imread(os.path.join(folder, filename), cv2.IMREAD_UNCHANGED)
         if img is not None:
-            i = cv2.normalize(img, None, alpha=0.0, beta=1.0, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
-            img_rgb = cv2.cvtColor(i, cv2.COLOR_BGR2RGB)
-            i = cv2.resize(img_rgb, (256, 256), interpolation=cv2.INTER_CUBIC)
-            images.append(i.astype(np.float32))
+            #i = cv2.normalize(img, None, alpha=0.0, beta=1.0, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
+            i = cv2.resize(img, (128, 128), interpolation=cv2.INTER_AREA)
+            img_rgb = np.transpose(i, axes=(1, 2, 0))
+            images.append(img_rgb.astype(np.float32))
 
     return np.array(images)
 
@@ -42,20 +42,22 @@ N2 = not_pizza_imgs.shape[0]
 limit1 = int(0.3 * N1)
 limit2 = int(0.3 * N2)
 
-test_pizza = pizza_imgs[:limit1]
-train_pizza = pizza_imgs[limit1:]
+test_pizza = jn.array(pizza_imgs[:limit1], dtype=jn.float32)
+train_pizza = jn.array(pizza_imgs[limit1:], dtype=jn.float32)
 
+train_pizza = (train_pizza - 128.0) / 255.0
 
+test_not_pizza = jn.array(not_pizza_imgs[:limit2], dtype=jn.float32)
+train_not_pizza = jn.array(not_pizza_imgs[limit2:], dtype=jn.float32)
 
-test_not_pizza = not_pizza_imgs[:limit2]
-train_not_pizza = not_pizza_imgs[limit2:]
+train_not_pizza = (train_not_pizza - 128.0) / 255.0
 
 total = jn.vstack([train_pizza, train_not_pizza])
 mu = jn.mean(total, axis=0)
 sigma = jn.std(total, axis=0)
 
-train_pizza = (train_pizza - mu) / sigma
-train_not_pizza = (train_not_pizza - mu) / sigma
+#train_pizza = (train_pizza - mu) / sigma
+#train_not_pizza = (train_not_pizza - mu) / sigma
         
 
 def compute_sampler(pizzas, not_pizzas, batch_size, num_devices, *, rng_key):
@@ -93,7 +95,7 @@ class ConvResBlock(hk.Module):
         self.kernel_size = kernel_size
         self.strides = strides
         self.dropout = dropout
-        self.ks = 1.0
+        self.ks = 0.99
         self.ko = 1e-8
 
     def __call__(self, inputs, is_training=True):
@@ -123,7 +125,7 @@ class ConvNet(hk.Module):
     def __init__(self, dropout, name: Optional[str]=None):
         super().__init__(name)
         self.dropout = dropout
-        self.ks = 1.0
+        self.ks = 0.99
         self.ko = 1e-8
 
     def __call__(self, inputs, is_training=True):
@@ -168,9 +170,9 @@ class ConvNet(hk.Module):
         for i in range(4):
             x = ConvResBlock((2 + i, 2 + i), (1, 1), dropout=dropout)(x, is_training)
 
-        x = hk.Flatten()(x)
+        x = jn.mean(x, axis=(1, 2)) # Global average pooling
         init = hki.VarianceScaling(scale=2.0, mode='fan_in', distribution='truncated_normal')
-        x = hk.Linear(64, w_init=init)(x)
+        x = hk.Linear(32, w_init=init)(x)
         x = hk.dropout(hk.next_rng_key(), dropout, x)
         x = jnn.relu(x)
         return hk.Linear(2, w_init=init)(x)
@@ -179,10 +181,10 @@ class ConvNet(hk.Module):
 
 def build_estimator(dropout):
     def forward_fn(x: jn.ndarray, is_training: bool = True) -> jn.ndarray:
-        #convn = ConvNet(dropout)
-        convn = hk.nets.ResNet200(2,resnet_v2=True)
+        convn = ConvNet(dropout)
+        #convn = hk.nets.ResNet18(2,resnet_v2=True)
         return convn(x, is_training=is_training)
-
+        
     return forward_fn
 
 
@@ -191,6 +193,7 @@ def binary_crossentropy_loss(forward_fn, params, state, rng, batch_x, batch_y, i
     logits, state = forward_fn(params, state, rng, batch_x, is_training)
     labels = jnn.one_hot(batch_y, 2)
 
+    
     return (jn.mean(optax.softmax_cross_entropy(logits=logits, labels=labels)), state)
 
 
@@ -230,11 +233,11 @@ def replicate(t, num_devices):
 
 
 def main():
-    max_steps = 666
-    dropout = 0.5
+    max_steps = 1220
+    dropout = 0.4
     grad_clip_value = 1.0
     learning_rate = 0.001
-    batch_size = 8
+    batch_size = 32
 
     num_devices = jax.local_device_count()
 
@@ -253,7 +256,7 @@ def main():
 
     optimizer = optax.chain(
         
-        optax.adaptive_grad_clip(grad_clip_value, eps=0.01),
+        optax.adaptive_grad_clip(grad_clip_value),
         #optax.sgd(learning_rate=learning_rate, momentum=0.95, nesterov=True),
         optax.radam(learning_rate=learning_rate)
     )

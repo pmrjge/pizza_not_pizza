@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 import jax
 import jax.numpy as jn
@@ -14,6 +15,8 @@ import os
 
 import functools as ft
 
+import optax
+
 def load_images_from_folder(folder):
     images = []
     for filename in os.listdir(folder):
@@ -21,6 +24,7 @@ def load_images_from_folder(folder):
         if img is not None:
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             i = img_rgb.resize((384, 384, 3))
+            i = (i - 128.0) / 255.0
             images.append(i)
 
     return np.array(images)
@@ -138,4 +142,93 @@ class ConvNet(hk.Module):
 def binary_crossentropy_loss(forward_fn, params, rng, batch_x, batch_y, is_training: bool = True):
     y_pred = forward_fn(params, rng, batch_x, is_training)
     return -jn.mean(y_pred * batch_y)
+
+
+class GradientUpdater:
+    def __init__(self, net_init, loss_fn, optimizer: optax.GradientTransformation):
+        self._net_init = net_init
+        self._loss_fn = loss_fn
+        self._opt = optimizer
+
+    def init(self, master_rng, x):
+        out_rng, init_rng = jax.random.split(master_rng)
+        params = self._net_init(init_rng, x)
+        opt_state = self._opt.init(params)
+        return jn.array(0), out_rng, params, opt_state
+
+    def update(self, num_steps, rng, params, opt_state, x:jn.ndarray, y: jn.ndarray):
+        rng, new_rng = jax.random.split(rng)
+
+        loss, grads = jax.value_and_grad(self._loss_fn)(params, rng, x, y)
+
+        grads = jax.lax.pmean(grads, axis_name='i')
+
+        updates, opt_state = self._opt.update(grads, opt_state, params)
+
+        params = optax.apply_updates(params, updates)
+
+        metrics = {
+            'step': num_steps,
+            'loss': loss,
+        }
+
+        return num_steps + 1, new_rng, params, opt_state, metrics
         
+
+def replicate(t, num_devices):
+    return jax.tree_map(lambda x: jnp.array([x] * num_devices), t)
+
+
+def main():
+    max_steps = 880
+    dropout = 0.6
+    grad_clip_value = 1.0
+    learning_rate = 0.001
+    batch_size = 32
+
+    num_devices = jax.local_device_count()
+
+    print("Num devices :::::: ", num_devices)
+
+    rng1, rng = jr.split(jax.random.PRNGKey(0))
+
+    train_dataset = RandomSampler(train_pizza, train_not_pizza, batch_size=batch_size, num_devices=num_devices, key = rng1).sample()
+
+    forward_fn = ConvNet(dropout)
+    forward_fn = hk.transform(forward_fn)
+
+    forward_apply = forward_fn.apply
+
+    loss_fn = ft.partial(binary_crossentropy_loss, forward_apply, is_training=True)
+
+    optimizer = optax.chain(
+        optax.adaptive_grad_clip(grad_clip_value),
+        #optax.sgd(learning_rate=learning_rate, momentum=0.95, nesterov=True),
+        optax.radam(learning_rate=learning_rate)
+    )
+
+    updater = GradientUpdater(forward_fn.init, loss_fn, optimizer)
+
+    logging.info('Initializing parameters...')
+    rng1, rng = jr.split(rng)
+    a = next(train_dataset)
+    w, z = a
+    num_steps, rng, params, opt_state = updater.init(rng1, w[0, :, :, :])
+
+    params_multi_device = params
+    opt_state_multi_device = opt_state
+    num_steps_replicated = replicate(num_steps, num_devices)
+    rng_replicated = rng
+
+    fn_update = jax.pmap(updater.update, axis_name="i", in_axes=(0, None, None, None, 0, 0), out_axes=(0, None, None, None, 0))
+
+    logging.info('Starting training loop +++++++++++++++')
+    for i, (w, z) in zip(range(max_steps), train_dataset):
+        if (i + 1) % 10 == 0:
+            logging.info(f'Step {i} of the computation of the forward-backward pass')
+        num_steps_replicated, rng_replicated, params_multi_device, opt_state_multi_device, metrics = \
+              fn_update(num_steps_replicated, rng_replicated, params_multi_device, opt_state_multi_device, w, z)
+
+        if (i + 1) % 10 == 0:
+            logging.info(f'Loss at step {i} :::::::::::: {metrics}')
+

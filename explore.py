@@ -24,9 +24,9 @@ def load_images_from_folder(folder):
         img = cv2.imread(os.path.join(folder, filename))
         if img is not None:
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            i = cv2.resize(img_rgb, (128, 128), interpolation=cv2.INTER_CUBIC)
+            i = cv2.resize(img_rgb, (256, 256), interpolation=cv2.INTER_CUBIC)
             i = cv2.normalize(i, None, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
-            images.append(np.array(i, dtype=np.float32))
+            images.append(i.astype(np.float32))
 
     return np.array(images)
 
@@ -39,8 +39,8 @@ np.random.shuffle(not_pizza_imgs)
 N1 = pizza_imgs.shape[0]
 N2 = not_pizza_imgs.shape[0]
 
-limit1 = int(0.25 * N1)
-limit2 = int(0.25 * N2)
+limit1 = int(0.3 * N1)
+limit2 = int(0.3 * N2)
 
 test_pizza = pizza_imgs[:limit1]
 train_pizza = pizza_imgs[limit1:]
@@ -120,16 +120,28 @@ class ConvNet(hk.Module):
         x = hk.dropout(hk.next_rng_key(), dropout, x)
         x = jnn.gelu(x)
         x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
+        x = hk.Conv2D(output_channels=128, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
+        x = hk.dropout(hk.next_rng_key(), dropout, x)
+        x = jnn.gelu(x)
+        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
+        x = hk.Conv2D(output_channels=128, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
+        x = hk.dropout(hk.next_rng_key(), dropout, x)
+        x = jnn.gelu(x)
+        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
+        x = hk.Conv2D(output_channels=256, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
+        x = hk.dropout(hk.next_rng_key(), dropout, x)
+        x = jnn.gelu(x)
 
-        for i in range(4):
-            x = ConvResBlock((3 + i, 3 + i), (1, 1), dropout=dropout)(x)
+        # for i in range(4):
+        #     x = ConvResBlock((3 + i, 3 + i), (1, 1), dropout=dropout)(x)
         
         x = hk.Conv2D(output_channels=192, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
         x = hk.dropout(hk.next_rng_key(), dropout, x)
         x = jnn.gelu(x)
+        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
 
-        for i in range(4):
-            x = ConvResBlock((5 + i, 5 + i), (1, 1), dropout=dropout)(x)
+        # for i in range(4):
+        #     x = ConvResBlock((5 + i, 5 + i), (1, 1), dropout=dropout)(x)
 
         x = hk.Flatten()(x)
         x = hk.Linear(64, w_init=init)(x)
@@ -192,7 +204,7 @@ def main():
     max_steps = 220
     dropout = 0.5
     grad_clip_value = 1.0
-    learning_rate = 0.0001
+    learning_rate = 0.001
     batch_size = 12
 
     num_devices = jax.local_device_count()
@@ -212,9 +224,9 @@ def main():
 
     optimizer = optax.chain(
         
-        optax.adaptive_grad_clip(grad_clip_value),
-        #optax.sgd(learning_rate=learning_rate, momentum=0.95, nesterov=True),
-        optax.radam(learning_rate=learning_rate)
+        optax.adaptive_grad_clip(grad_clip_value, eps=0.01),
+        optax.sgd(learning_rate=learning_rate, momentum=0.95, nesterov=True),
+        #optax.radam(learning_rate=learning_rate)
     )
 
     updater = GradientUpdater(forward_fn.init, loss_fn, optimizer)

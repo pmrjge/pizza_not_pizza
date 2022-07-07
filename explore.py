@@ -304,7 +304,7 @@ def main():
     n1 = test_pizza.shape[0]
     for i in range(n1):
         (rng,) = jr.split(rng, 1)
-        logits = fn(params, state, rng, jn.expand_dims(test_pizza[i], axis=0), is_training=False)
+        logits, _ = fn(params, state, rng, jn.expand_dims(test_pizza[i], axis=0), is_training=False)
         pred = jn.argmax(jnn.softmax(logits))
         if pred == 1:
             correct += 1.0
@@ -312,7 +312,7 @@ def main():
     n2 = test_not_pizza.shape[0]
     for j in range(n2):
         (rng,) = jr.split(rng, 1)
-        logits = fn(params, state, rng, jn.expand_dims(test_not_pizza[j], axis=0), is_training=False)
+        logits, _ = fn(params, state, rng, jn.expand_dims(test_not_pizza[j], axis=0), is_training=False)
         pred = jn.argmax(jnn.softmax(logits))
         if pred == 0:
             correct += 1.0

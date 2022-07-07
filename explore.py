@@ -25,7 +25,7 @@ def load_images_from_folder(folder):
         if img is not None:
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             i = cv2.resize(img_rgb, (384, 384), interpolation=cv2.INTER_CUBIC)
-            i[:, :, 0:3] = (i[:, :, 0:3]- 128.0) / 255.0
+            i = cv2.normalize(i, None, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
             images.append(np.array(i, dtype=np.float32))
 
     return np.array(images)
@@ -60,7 +60,7 @@ def compute_sampler(pizzas, not_pizzas, batch_size, num_devices, *, rng_key):
             npz = not_pizzas
             key = rng_key
             while True:
-                key, k1, k2 = jr.split(key, 3)
+                key, k1, k2, k3 = jr.split(key, 4)
                 perm1 = jax.random.choice(k1, n, shape=(dd,))
                 perm2 = jax.random.choice(k2, n, shape=(dd,))
                 p = pz[perm1]
@@ -70,7 +70,10 @@ def compute_sampler(pizzas, not_pizzas, batch_size, num_devices, *, rng_key):
                 b = jn.zeros(shape=(dd,))
                 yy = jn.ones(shape=(bs,))
                 yy = yy.at[dd:].set(0.0)
-                yield xx.reshape(num_devices, kk, *xx.shape[1:]), yy.reshape(num_devices, kk, 1)
+                perm3 = jax.random.permutation(k3, bs)
+                xx = xx[perm3]
+                yy = yy[perm3]
+                yield xx.reshape(num_devices, kk, *xx.shape[1:]), yy.reshape(num_devices, kk, *yy.shape[1:])
 
         return generator()
 
@@ -83,18 +86,18 @@ class ConvResBlock(hk.Module):
         self.dropout = dropout
 
     def __call__(self, inputs):
-        features = x.inputs[-1]
+        features = inputs.shape[-1]
         init = hki.VarianceScaling(0.01)
         x = hk.Conv2D(output_channels=features, kernel_shape=self.kernel_size, stride=self.strides, padding="SAME", w_init=init)(inputs)
         x = jnn.gelu(x)
-        x = hk.Conv2D(output_channels=2 * features, kernel_shape=self.kernel_size, stride=self.strides, padding="SAME", w_init=init)(x)
+        x = hk.Conv2D(output_channels= 2 * features, kernel_shape=self.kernel_size, stride=self.strides, padding="SAME", w_init=init)(x)
         x = jnn.gelu(x)
         x = hk.Conv2D(output_channels=2 * features, kernel_shape=self.kernel_size, stride=self.strides, padding="SAME",w_init=init)(x)
         x = jnn.gelu(x)
         x = hk.Conv2D(output_channels=features, kernel_shape=self.kernel_size, stride=self.strides, padding="SAME",w_init=init)(x)
         x = hk.dropout(hk.next_rng_key(), self.dropout, x)
         x = jnn.gelu(x)
-        return x + inputs
+        return jnn.gelu(x + inputs)
 
 
 class ConvNet(hk.Module):
@@ -104,33 +107,35 @@ class ConvNet(hk.Module):
 
     def __call__(self, x, is_training=True):
         dropout = self.dropout if is_training else 0.0
-        x = hk.Conv2D(output_channels=32, kernel_shape=(3, 3), stride=(1, 1), padding="SAME")(x)
+        init = hki.VarianceScaling(0.01)
+        x = hk.Conv2D(output_channels=32, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
         x = hk.dropout(hk.next_rng_key(), dropout, x)
         x = jnn.gelu(x)
         x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
-        x = hk.Conv2D(output_channels=64, kernel_shape=(3, 3), stride=(1, 1), padding="SAME")(x)
+        x = hk.Conv2D(output_channels=64, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
         x = hk.dropout(hk.next_rng_key(), dropout, x)
         x = jnn.gelu(x)
         x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
-        x = hk.Conv2D(output_channels=128, kernel_shape=(3, 3), stride=(1, 1), padding="SAME")(x)
+        x = hk.Conv2D(output_channels=128, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
         x = hk.dropout(hk.next_rng_key(), dropout, x)
         x = jnn.gelu(x)
         x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
 
         for i in range(4):
-            x = ConvResBlock((3, 3), (1, 1), dropout=dropout)(x)
+            x = ConvResBlock((3 + i, 3 + i), (1, 1), dropout=dropout)(x)
         
-        x = hk.Conv2D(output_channels=256, kernel_shape=(3, 3), stride=(1, 1), padding="SAME")(x)
+        x = hk.Conv2D(output_channels=256, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
         x = hk.dropout(hk.next_rng_key(), dropout, x)
         x = jnn.gelu(x)
-        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
 
         for i in range(4):
-            x = ConvResBlock((3, 3), (1, 1), dropout=dropout)(x)
+            x = ConvResBlock((5 + i, 5 + i), (1, 1), dropout=dropout)(x)
 
         x = hk.Flatten()(x)
-        logits = hk.Linear(1)(x)
-        return logits - jnn.logsumexp(logits)
+        x = hk.Linear(128, w_init=init)(x)
+        x = jnn.gelu(x)
+        logits = hk.Linear(1, w_init=init)(x)
+        return jnn.sigmoid(logits)
 
 
 def build_estimator(dropout):
@@ -144,7 +149,7 @@ def build_estimator(dropout):
 @ft.partial(jax.jit, static_argnums=(0, 5))
 def binary_crossentropy_loss(forward_fn, params, rng, batch_x, batch_y, is_training: bool = True):
     y_pred = forward_fn(params, rng, batch_x, is_training)
-    return -jn.mean(y_pred * batch_y)
+    return -jn.mean(batch_y * jn.log(y_pred) + (1 - batch_y) * jn.log(1 - y_pred))
 
 
 class GradientUpdater:
@@ -164,6 +169,7 @@ class GradientUpdater:
 
         loss, grads = jax.value_and_grad(self._loss_fn)(params, rng, x, y)
 
+
         grads = jax.lax.pmean(grads, axis_name='i')
 
         updates, opt_state = self._opt.update(grads, opt_state, params)
@@ -179,15 +185,15 @@ class GradientUpdater:
         
 
 def replicate(t, num_devices):
-    return jax.tree_map(lambda x: jnp.array([x] * num_devices), t)
+    return jax.tree_map(lambda x: jn.array([x] * num_devices), t)
 
 
 def main():
     max_steps = 150
     dropout = 0.6
     grad_clip_value = 1.0
-    learning_rate = 0.001
-    batch_size = 32
+    learning_rate = 0.01
+    batch_size = 16
 
     num_devices = jax.local_device_count()
 
@@ -205,6 +211,7 @@ def main():
     loss_fn = ft.partial(binary_crossentropy_loss, forward_apply, is_training=True)
 
     optimizer = optax.chain(
+        
         optax.adaptive_grad_clip(grad_clip_value),
         #optax.sgd(learning_rate=learning_rate, momentum=0.95, nesterov=True),
         optax.radam(learning_rate=learning_rate)

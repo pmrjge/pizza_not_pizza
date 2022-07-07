@@ -23,9 +23,9 @@ def load_images_from_folder(folder):
     for filename in os.listdir(folder):
         img = cv2.imread(os.path.join(folder, filename))
         if img is not None:
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            i = cv2.normalize(img, None, alpha=0.0, beta=1.0, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
+            img_rgb = cv2.cvtColor(i, cv2.COLOR_BGR2RGB)
             i = cv2.resize(img_rgb, (256, 256), interpolation=cv2.INTER_CUBIC)
-            i = cv2.normalize(i, None, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
             images.append(i.astype(np.float32))
 
     return np.array(images)
@@ -45,11 +45,17 @@ limit2 = int(0.3 * N2)
 test_pizza = pizza_imgs[:limit1]
 train_pizza = pizza_imgs[limit1:]
 
-train_pizza = jn.ones_like(train_pizza) * 0.0001
+
 
 test_not_pizza = not_pizza_imgs[:limit2]
 train_not_pizza = not_pizza_imgs[limit2:]
-train_not_pizza = jn.ones_like(train_not_pizza) * 0.0003
+
+total = jn.vstack([train_pizza, train_not_pizza])
+mu = jn.mean(total, axis=0)
+sigma = jn.std(total, axis=0)
+
+train_pizza = (train_pizza - mu) / sigma
+train_not_pizza = (train_not_pizza - mu) / sigma
         
 
 def compute_sampler(pizzas, not_pizzas, batch_size, num_devices, *, rng_key):

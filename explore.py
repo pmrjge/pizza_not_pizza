@@ -45,8 +45,11 @@ limit2 = int(0.3 * N2)
 test_pizza = pizza_imgs[:limit1]
 train_pizza = pizza_imgs[limit1:]
 
+train_pizza = jn.ones_like(train_pizza) * 0.0001
+
 test_not_pizza = not_pizza_imgs[:limit2]
 train_not_pizza = not_pizza_imgs[limit2:]
+train_not_pizza = jn.ones_like(train_not_pizza) * 0.0003
         
 
 def compute_sampler(pizzas, not_pizzas, batch_size, num_devices, *, rng_key):
@@ -224,7 +227,7 @@ def main():
     max_steps = 666
     dropout = 0.5
     grad_clip_value = 1.0
-    learning_rate = 0.00001
+    learning_rate = 0.001
     batch_size = 8
 
     num_devices = jax.local_device_count()

@@ -187,8 +187,8 @@ class ConvNet(hk.Module):
 
 def build_estimator(dropout):
     def forward_fn(x: jn.ndarray, is_training: bool = True) -> jn.ndarray:
-        convn = ConvNet(dropout)
-        #convn = hk.nets.ResNet18(2,resnet_v2=True)
+        #convn = ConvNet(dropout)
+        convn = hk.nets.ResNet101(2,resnet_v2=True)
         return convn(x, is_training=is_training)
         
     return forward_fn
@@ -239,11 +239,11 @@ def replicate(t, num_devices):
 
 
 def main():
-    max_steps = 800
+    max_steps = 1480
     dropout = 0.4
     grad_clip_value = 1.0
     learning_rate = 0.001
-    batch_size = 32
+    batch_size = 8
 
     num_devices = jax.local_device_count()
 

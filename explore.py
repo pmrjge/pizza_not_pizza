@@ -26,7 +26,7 @@ def load_images_from_folder(folder):
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             i = cv2.resize(img_rgb, (384, 384), interpolation=cv2.INTER_CUBIC)
             i[:, :, 0:3] = (i[:, :, 0:3]- 128.0) / 255.0
-            images.append(i)
+            images.append(np.array(i, dtype=np.float32))
 
     return np.array(images)
 
@@ -76,23 +76,22 @@ def compute_sampler(pizzas, not_pizzas, batch_size, num_devices, *, rng_key):
 
 
 class ConvResBlock(hk.Module):
-    def __init__(self, kernel_size, strides, padding, dropout, name: Optional[str] = None):
+    def __init__(self, kernel_size, strides, dropout, name: Optional[str] = None):
         super().__init__(name)
         self.kernel_size = kernel_size
         self.strides = strides
-        self.padding = padding
         self.dropout = dropout
 
     def __call__(self, inputs):
         features = x.inputs[-1]
         init = hki.VarianceScaling(0.01)
-        x = hk.Conv2D(output_channels=features, kernel_shape=self.kernel_size, stride=self.strides, padding="same", w_init=init)(inputs)
+        x = hk.Conv2D(output_channels=features, kernel_shape=self.kernel_size, stride=self.strides, padding="SAME", w_init=init)(inputs)
         x = jnn.gelu(x)
-        x = hk.Conv2D(output_channels=2 * features, kernel_shape=self.kernel_size, stride=self.strides, padding="same", w_init=init)(x)
+        x = hk.Conv2D(output_channels=2 * features, kernel_shape=self.kernel_size, stride=self.strides, padding="SAME", w_init=init)(x)
         x = jnn.gelu(x)
-        x = hk.Conv2D(output_channels=2 * features, kernel_shape=self.kernel_size, stride=self.strides, padding="same",w_init=init)(x)
+        x = hk.Conv2D(output_channels=2 * features, kernel_shape=self.kernel_size, stride=self.strides, padding="SAME",w_init=init)(x)
         x = jnn.gelu(x)
-        x = hk.Conv2D(output_channels=features, kernel_shape=self.kernel_size, stride=self.strides, padding="same",w_init=init)(x)
+        x = hk.Conv2D(output_channels=features, kernel_shape=self.kernel_size, stride=self.strides, padding="SAME",w_init=init)(x)
         x = hk.dropout(hk.next_rng_key(), self.dropout, x)
         x = jnn.gelu(x)
         return x + inputs
@@ -105,29 +104,29 @@ class ConvNet(hk.Module):
 
     def __call__(self, x, is_training=True):
         dropout = self.dropout if is_training else 0.0
-        x = hk.Conv2D(output_channels=32, kernel_shape=(3, 3), stride=(1, 1), padding="same")
+        x = hk.Conv2D(output_channels=32, kernel_shape=(3, 3), stride=(1, 1), padding="SAME")(x)
         x = hk.dropout(hk.next_rng_key(), dropout, x)
         x = jnn.gelu(x)
-        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="same")
-        x = hk.Conv2D(output_channels=64, kernel_shape=(3, 3), stride=(1, 1), padding="same")
+        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
+        x = hk.Conv2D(output_channels=64, kernel_shape=(3, 3), stride=(1, 1), padding="SAME")(x)
         x = hk.dropout(hk.next_rng_key(), dropout, x)
         x = jnn.gelu(x)
-        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="same")
-        x = hk.Conv2D(output_channels=128, kernel_shape=(3, 3), stride=(1, 1), padding="same")
+        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
+        x = hk.Conv2D(output_channels=128, kernel_shape=(3, 3), stride=(1, 1), padding="SAME")(x)
         x = hk.dropout(hk.next_rng_key(), dropout, x)
         x = jnn.gelu(x)
-        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="same")
+        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
 
         for i in range(4):
-            x = ConvResBlock((3, 3), (1, 1), "same", dropout=dropout)(x)
+            x = ConvResBlock((3, 3), (1, 1), dropout=dropout)(x)
         
-        x = hk.Conv2D(output_channels=256, kernel_shape=(3, 3), stride=(1, 1), padding="same")
+        x = hk.Conv2D(output_channels=256, kernel_shape=(3, 3), stride=(1, 1), padding="SAME")(x)
         x = hk.dropout(hk.next_rng_key(), dropout, x)
         x = jnn.gelu(x)
-        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="same")
+        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
 
         for i in range(4):
-            x = ConvResBlock((3, 3), (1, 1), "same", dropout=dropout)(x)
+            x = ConvResBlock((3, 3), (1, 1), dropout=dropout)(x)
 
         x = hk.Flatten()(x)
         logits = hk.Linear(1)(x)

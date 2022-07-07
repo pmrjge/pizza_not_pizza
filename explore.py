@@ -1,4 +1,5 @@
 import logging
+from turtle import forward
 from typing import Optional
 import jax
 import jax.numpy as jn
@@ -23,8 +24,8 @@ def load_images_from_folder(folder):
         img = cv2.imread(os.path.join(folder, filename))
         if img is not None:
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            i = img_rgb.resize((384, 384, 3))
-            i = (i - 128.0) / 255.0
+            i = cv2.resize(img_rgb, (384, 384), interpolation=cv2.INTER_CUBIC)
+            i[:, :, 0:3] = (i[:, :, 0:3]- 128.0) / 255.0
             images.append(i)
 
     return np.array(images)
@@ -32,48 +33,44 @@ def load_images_from_folder(folder):
 pizza_imgs = load_images_from_folder('data/pizza')
 not_pizza_imgs = load_images_from_folder('data/not_pizza')
 
-aux_pizza_imgs = np.random.shuffle(pizza_imgs)
-aux_not_pizza_imgs = np.random.shuffle(not_pizza_imgs)
+np.random.shuffle(pizza_imgs)
+np.random.shuffle(not_pizza_imgs)
 
-N1 = aux_pizza_imgs.shape[0]
-N2 = aux_not_pizza_imgs.shape[0]
+N1 = pizza_imgs.shape[0]
+N2 = not_pizza_imgs.shape[0]
 
 limit1 = int(0.25 * N1)
 limit2 = int(0.25 * N2)
 
-test_pizza = aux_pizza_imgs[:limit1]
-train_pizza = aux_pizza_imgs[limit1:]
+test_pizza = pizza_imgs[:limit1]
+train_pizza = pizza_imgs[limit1:]
 
-test_not_pizza = aux_not_pizza_imgs[:limit2]
-train_not_pizza = aux_not_pizza_imgs[limit2:]
+test_not_pizza = not_pizza_imgs[:limit2]
+train_not_pizza = not_pizza_imgs[limit2:]
         
-class RandomSampler:
-    def __init__(self, pizzas, not_pizzas, batch_size, num_devices, *, key):
-        self.pizzas = pizzas
-        self.not_pizzas = not_pizzas
-        self.key = key
-        self.batch_size = batch_size
-        self.num_devices = num_devices
 
-    def sample(self):
-        pizzas = self.pizzas
-        not_pizzas = self.not_pizzas
-        key = self.key
-        batch_size = self.batch_size
-        num_devices = self.num_devices
-        kk = batch_size // num_devices
-        dd = batch_size // 2
-        n = pizzas.shape[0]
+def compute_sampler(pizzas, not_pizzas, batch_size, num_devices, *, rng_key):
+
         def generator():
+            kk = batch_size // num_devices
+            dd = batch_size // 2
+            n = pizzas.shape[0]
+            bs = batch_size
+            pz = pizzas
+            npz = not_pizzas
+            key = rng_key
             while True:
                 key, k1, k2 = jr.split(key, 3)
                 perm1 = jax.random.choice(k1, n, shape=(dd,))
                 perm2 = jax.random.choice(k2, n, shape=(dd,))
-                p = pizzas[perm1]
-                not_p = not_pizzas[perm2]
-                xx = jn.stack([p, not_p], axis=0)
-                yy = jn.stack([jn.ones(shape=(dd,)), jn.zeros(shape=(dd,))], axis=0).expand_dims(axis=1)
-                return xx.reshape(num_devices, kk, *xx.shape[1:]), yy.reshape(num_devices, kk, *yy.shape[1:])
+                p = pz[perm1]
+                not_p = npz[perm2]
+                xx = jn.vstack([p, not_p])
+                a = jn.ones(shape=(dd,))
+                b = jn.zeros(shape=(dd,))
+                yy = jn.ones(shape=(bs,))
+                yy = yy.at[dd:].set(0.0)
+                yield xx.reshape(num_devices, kk, *xx.shape[1:]), yy.reshape(num_devices, kk, 1)
 
         return generator()
 
@@ -137,6 +134,13 @@ class ConvNet(hk.Module):
         return logits - jnn.logsumexp(logits)
 
 
+def build_estimator(dropout):
+    def forward_fn(x: jn.ndarray, is_training: bool = True) -> jn.ndarray:
+        convn = ConvNet(dropout)
+        return convn(x, is_training=is_training)
+
+    return forward_fn
+
 
 @ft.partial(jax.jit, static_argnums=(0, 5))
 def binary_crossentropy_loss(forward_fn, params, rng, batch_x, batch_y, is_training: bool = True):
@@ -180,7 +184,7 @@ def replicate(t, num_devices):
 
 
 def main():
-    max_steps = 880
+    max_steps = 150
     dropout = 0.6
     grad_clip_value = 1.0
     learning_rate = 0.001
@@ -192,9 +196,9 @@ def main():
 
     rng1, rng = jr.split(jax.random.PRNGKey(0))
 
-    train_dataset = RandomSampler(train_pizza, train_not_pizza, batch_size=batch_size, num_devices=num_devices, key = rng1).sample()
+    train_dataset = compute_sampler(train_pizza, train_not_pizza, batch_size=batch_size, num_devices=num_devices, rng_key = rng1)
 
-    forward_fn = ConvNet(dropout)
+    forward_fn = build_estimator(dropout)
     forward_fn = hk.transform(forward_fn)
 
     forward_apply = forward_fn.apply
@@ -232,3 +236,6 @@ def main():
         if (i + 1) % 10 == 0:
             logging.info(f'Loss at step {i} :::::::::::: {metrics}')
 
+if __name__ == "__main__":
+    logging.getLogger().setLevel(logging.INFO)
+    main()

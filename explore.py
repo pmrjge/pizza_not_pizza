@@ -239,7 +239,7 @@ def replicate(t, num_devices):
 
 
 def main():
-    max_steps = 1
+    max_steps = 800
     dropout = 0.4
     grad_clip_value = 1.0
     learning_rate = 0.001

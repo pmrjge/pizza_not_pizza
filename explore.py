@@ -84,8 +84,8 @@ class ConvResBlock(hk.Module):
         self.kernel_size = kernel_size
         self.strides = strides
         self.dropout = dropout
-        self.ks = 0.001
-        self.ko = 0.01
+        self.ks = 1.0
+        self.ko = 1e-8
 
     def __call__(self, inputs, is_training=True):
         features = inputs.shape[-1]
@@ -114,8 +114,8 @@ class ConvNet(hk.Module):
     def __init__(self, dropout, name: Optional[str]=None):
         super().__init__(name)
         self.dropout = dropout
-        self.ks = 0.001
-        self.ko = 0.01
+        self.ks = 1.0
+        self.ko = 1e-8
 
     def __call__(self, inputs, is_training=True):
         dropout = self.dropout if is_training else 0.0
@@ -170,7 +170,8 @@ class ConvNet(hk.Module):
 
 def build_estimator(dropout):
     def forward_fn(x: jn.ndarray, is_training: bool = True) -> jn.ndarray:
-        convn = ConvNet(dropout)
+        #convn = ConvNet(dropout)
+        convn = hk.nets.ResNet200(2,resnet_v2=True)
         return convn(x, is_training=is_training)
 
     return forward_fn
@@ -220,11 +221,11 @@ def replicate(t, num_devices):
 
 
 def main():
-    max_steps = 220
+    max_steps = 666
     dropout = 0.5
     grad_clip_value = 1.0
-    learning_rate = 0.01
-    batch_size = 12
+    learning_rate = 0.00001
+    batch_size = 8
 
     num_devices = jax.local_device_count()
 

@@ -46,18 +46,25 @@ test_pizza = jn.array(pizza_imgs[:limit1], dtype=jn.float32)
 train_pizza = jn.array(pizza_imgs[limit1:], dtype=jn.float32)
 
 train_pizza = (train_pizza - 128.0) / 255.0
+test_pizza = (test_pizza - 128.0) / 255.0
+
 
 test_not_pizza = jn.array(not_pizza_imgs[:limit2], dtype=jn.float32)
 train_not_pizza = jn.array(not_pizza_imgs[limit2:], dtype=jn.float32)
 
 train_not_pizza = (train_not_pizza - 128.0) / 255.0
+test_not_pizza = (test_not_pizza - 128.0) / 255.0
 
 total = jn.vstack([train_pizza, train_not_pizza])
 mu = jn.mean(total, axis=0)
 sigma = jn.std(total, axis=0)
 
-#train_pizza = (train_pizza - mu) / sigma
-#train_not_pizza = (train_not_pizza - mu) / sigma
+train_pizza = (train_pizza - mu) / sigma
+train_not_pizza = (train_not_pizza - mu) / sigma
+
+
+test_pizza = (test_pizza - mu) / sigma
+test_not_pizza = (test_not_pizza - mu) / sigma
         
 
 def compute_sampler(pizzas, not_pizzas, batch_size, num_devices, *, rng_key):
@@ -269,13 +276,13 @@ def main():
     w, z = a
     num_steps, rng, params, state, opt_state = updater.init(rng1, w[0, :, :, :])
 
-    params_multi_device = replicate(params, num_devices)
-    opt_state_multi_device = replicate(opt_state, num_devices)
+    params_multi_device = params
+    opt_state_multi_device = opt_state
     num_steps_replicated = replicate(num_steps, num_devices)
-    state_multi_device = replicate(state, num_devices)
+    state_multi_device = state
     rng_replicated = rng
 
-    fn_update = jax.pmap(updater.update, axis_name="i", in_axes=(0, None, 0, 0, 0, 0, 0), out_axes=(0, None, 0, 0, 0, 0))
+    fn_update = jax.pmap(updater.update, axis_name="i", in_axes=(0, None, None, None, None, 0, 0), out_axes=(0, None, None, None, None, 0))
 
     logging.info('Starting training loop +++++++++++++++')
     for i, (w, z) in zip(range(max_steps), train_dataset):
@@ -287,6 +294,31 @@ def main():
         if (i + 1) % 10 == 0:
             logging.info(f'Loss at step {i} :::::::::::: {metrics}')
 
+    logging.info('Starting evaluation loop +++++++++++++++')
+    state = state_multi_device
+    rng = rng_replicated
+    params = params_multi_device
+
+    fn = jax.jit(forward_apply, static_argnames=['is_training'])
+
+    correct = 0.0
+    n1 = test_pizza.shape[0]
+    for i in range(n1):
+        (rng,) = jr.split(rng, 1)
+        logits = fn(params, state, rng, test_pizza[i], is_training=False)
+        pred = jn.argmax(jnn.softmax(logits))
+        if pred == 1:
+            correct += 1.0
+
+    n2 = test_not_pizza.shape[0]
+    for j in range(n2):
+        (rng,) = jr.split(rng, 1)
+        logits = fn(params, state, rng, test_not_pizza[j], is_training=False)
+        pred = jn.argmax(jnn.softmax(logits))
+        if pred == 0:
+            correct += 1.0
+
+    print("Final accuracy ::::: ", correct / (n1 + n2))
 if __name__ == "__main__":
     logging.getLogger().setLevel(logging.INFO)
     main()

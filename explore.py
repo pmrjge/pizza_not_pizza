@@ -61,19 +61,19 @@ def compute_sampler(pizzas, not_pizzas, batch_size, num_devices, *, rng_key):
             key = rng_key
             while True:
                 key, k1, k2, k3 = jr.split(key, 4)
-                perm1 = jax.random.choice(k1, n, shape=(dd,))
-                perm2 = jax.random.choice(k2, n, shape=(dd,))
+                perm1 = jr.choice(k1, n, shape=(dd,))
+                perm2 = jr.choice(k2, n, shape=(dd,))
                 p = pz[perm1]
                 not_p = npz[perm2]
                 xx = jn.vstack([p, not_p])
-                a = jn.ones(shape=(dd,))
+                a = jn.ones(shape=(dd,), dtype=jn.int32)
                 b = jn.zeros(shape=(dd,))
                 yy = jn.ones(shape=(bs,))
-                yy = yy.at[dd:].set(0.0)
-                perm3 = jax.random.permutation(k3, bs)
+                yy = yy.at[dd:].set(0)
+                perm3 = jr.permutation(k3, bs)
                 xx = xx[perm3]
                 yy = yy[perm3]
-                yield xx.reshape(num_devices, kk, *xx.shape[1:]), yy.reshape(num_devices, kk, *yy.shape[1:])
+                yield xx.reshape(num_devices, kk, *xx.shape[1:]), jn.array(yy.reshape(num_devices, kk, *yy.shape[1:]), dtype=jn.int32)
 
         return generator()
 
@@ -85,19 +85,25 @@ class ConvResBlock(hk.Module):
         self.strides = strides
         self.dropout = dropout
 
-    def __call__(self, inputs):
+    def __call__(self, inputs, is_training=True):
         features = inputs.shape[-1]
-        init = hki.VarianceScaling(0.01)
+        ks = 0.001
+        ko = 0.01
+        init = hki.VarianceScaling(scale=1.0, mode='fan_avg', distribution='truncated_normal')
         x = hk.Conv2D(output_channels=features, kernel_shape=self.kernel_size, stride=self.strides, padding="SAME", w_init=init)(inputs)
-        x = jnn.gelu(x)
+        x = hk.BatchNorm(True, True, 0.95, scale_init=hki.RandomUniform(ks), offset_init=hki.RandomUniform(ko))(x, is_training)
+        x = jnn.relu(x)
         x = hk.Conv2D(output_channels= 2 * features, kernel_shape=self.kernel_size, stride=self.strides, padding="SAME", w_init=init)(x)
-        x = jnn.gelu(x)
+        x = hk.BatchNorm(True, True, 0.95, scale_init=hki.RandomUniform(ks), offset_init=hki.RandomUniform(ko))(x, is_training)
+        x = jnn.relu(x)
         x = hk.Conv2D(output_channels=2 * features, kernel_shape=self.kernel_size, stride=self.strides, padding="SAME",w_init=init)(x)
-        x = jnn.gelu(x)
+        x = hk.BatchNorm(True, True, 0.95, scale_init=hki.RandomUniform(ks), offset_init=hki.RandomUniform(ko))(x, is_training)
+        x = jnn.relu(x)
         x = hk.Conv2D(output_channels=features, kernel_shape=self.kernel_size, stride=self.strides, padding="SAME",w_init=init)(x)
+        x = hk.BatchNorm(True, True, 0.95, scale_init=hki.RandomUniform(ks), offset_init=hki.RandomUniform(ko))(x, is_training)
         x = hk.dropout(hk.next_rng_key(), self.dropout, x)
-        x = jnn.gelu(x)
-        return jnn.gelu(x + inputs)
+        x = jnn.relu(x)
+        return jnn.relu(x + inputs)
 
 
 class ConvNet(hk.Module):
@@ -105,49 +111,54 @@ class ConvNet(hk.Module):
         super().__init__(name)
         self.dropout = dropout
 
-    def __call__(self, x, is_training=True):
+    def __call__(self, inputs, is_training=True):
         dropout = self.dropout if is_training else 0.0
-        init = hki.VarianceScaling(0.01)
-        x = hk.Conv2D(output_channels=32, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
-        x = hk.dropout(hk.next_rng_key(), dropout, x)
-        x = jnn.gelu(x)
-        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
+        ks = 0.001
+        ko = 0.01
+        init = hki.VarianceScaling(scale=1.0, mode='fan_avg', distribution='truncated_normal')
+        x = hk.Conv2D(output_channels=32, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(inputs)
+        x = hk.BatchNorm(True, True, 0.95, scale_init=hki.RandomUniform(ks), offset_init=hki.RandomUniform(ko))(x, is_training)
+        x = jnn.relu(x)
+        x = hk.MaxPool(window_shape=(2, 2), strides=(2, 2), padding="SAME")(x)
         x = hk.Conv2D(output_channels=64, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
-        x = hk.dropout(hk.next_rng_key(), dropout, x)
-        x = jnn.gelu(x)
-        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
+        x = hk.BatchNorm(True, True, 0.95, scale_init=hki.RandomUniform(ks), offset_init=hki.RandomUniform(ko))(x, is_training)
+        x = jnn.relu(x)
+        x = hk.MaxPool(window_shape=(2, 2), strides=(2, 2), padding="SAME")(x)
         x = hk.Conv2D(output_channels=128, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
-        x = hk.dropout(hk.next_rng_key(), dropout, x)
-        x = jnn.gelu(x)
-        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
+        x = hk.BatchNorm(True, True, 0.95, scale_init=hki.RandomUniform(ks), offset_init=hki.RandomUniform(ko))(x, is_training)
+        x = jnn.relu(x)
+        x = hk.MaxPool(window_shape=(2, 2), strides=(2, 2), padding="SAME")(x)
         x = hk.Conv2D(output_channels=128, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
-        x = hk.dropout(hk.next_rng_key(), dropout, x)
-        x = jnn.gelu(x)
-        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
+        x = hk.BatchNorm(True, True, 0.95, scale_init=hki.RandomUniform(ks), offset_init=hki.RandomUniform(ko))(x, is_training)
+        x = jnn.relu(x)
+        x = hk.MaxPool(window_shape=(2, 2), strides=(2, 2), padding="SAME")(x)
         x = hk.Conv2D(output_channels=128, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
-        x = hk.dropout(hk.next_rng_key(), dropout, x)
-        x = jnn.gelu(x)
-        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
+        x = hk.BatchNorm(True, True, 0.95, scale_init=hki.RandomUniform(ks), offset_init=hki.RandomUniform(ko))(x, is_training)
+        x = jnn.relu(x)
+        x = hk.MaxPool(window_shape=(2, 2), strides=(2, 2), padding="SAME")(x)
         x = hk.Conv2D(output_channels=256, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
-        x = hk.dropout(hk.next_rng_key(), dropout, x)
-        x = jnn.gelu(x)
+        x = hk.BatchNorm(True, True, 0.95, scale_init=hki.RandomUniform(ks), offset_init=hki.RandomUniform(ko))(x, is_training)
+        x = jnn.relu(x)
 
-        # for i in range(4):
-        #     x = ConvResBlock((3 + i, 3 + i), (1, 1), dropout=dropout)(x)
+        for i in range(4):
+            x = ConvResBlock((1 + i, 1 + i), (1, 1), dropout=dropout)(x, is_training)
         
         x = hk.Conv2D(output_channels=192, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
+        x = hk.BatchNorm(True, True, 0.95, scale_init=hki.RandomUniform(ks), offset_init=hki.RandomUniform(ko))(x, is_training)
         x = hk.dropout(hk.next_rng_key(), dropout, x)
-        x = jnn.gelu(x)
-        x = hk.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
+        x = jnn.relu(x)
+        x = hk.MaxPool(window_shape=(2, 2), strides=(2, 2), padding="SAME")(x)
 
-        # for i in range(4):
-        #     x = ConvResBlock((5 + i, 5 + i), (1, 1), dropout=dropout)(x)
+        for i in range(4):
+            x = ConvResBlock((2 + i, 2 + i), (1, 1), dropout=dropout)(x, is_training)
 
         x = hk.Flatten()(x)
+        init = hki.VarianceScaling(scale=2.0, mode='fan_in', distribution='truncated_normal')
         x = hk.Linear(64, w_init=init)(x)
-        x = jnn.gelu(x)
-        logits = hk.Linear(1, w_init=init)(x)
-        return jnn.sigmoid(logits)
+        x = hk.dropout(hk.next_rng_key(), dropout, x)
+        x = jnn.relu(x)
+        return hk.Linear(2, w_init=init)(x)
+        
 
 
 def build_estimator(dropout):
@@ -160,8 +171,10 @@ def build_estimator(dropout):
 
 @ft.partial(jax.jit, static_argnums=(0, 5))
 def binary_crossentropy_loss(forward_fn, params, rng, batch_x, batch_y, is_training: bool = True):
-    y_pred = forward_fn(params, rng, batch_x, is_training)
-    return -jn.mean(batch_y * jn.log(y_pred) + (1 - batch_y) * jn.log(1 - y_pred))
+    logits = forward_fn(params, rng, batch_x, is_training)
+    labels = jnn.one_hot(batch_y, 2)
+    
+    return jn.mean(optax.softmax_cross_entropy(logits=logits, labels=labels))
 
 
 class GradientUpdater:
@@ -180,7 +193,6 @@ class GradientUpdater:
         rng, new_rng = jax.random.split(rng)
 
         loss, grads = jax.value_and_grad(self._loss_fn)(params, rng, x, y)
-
 
         grads = jax.lax.pmean(grads, axis_name='i')
 
@@ -204,7 +216,7 @@ def main():
     max_steps = 220
     dropout = 0.5
     grad_clip_value = 1.0
-    learning_rate = 0.001
+    learning_rate = 0.01
     batch_size = 12
 
     num_devices = jax.local_device_count()
@@ -225,8 +237,8 @@ def main():
     optimizer = optax.chain(
         
         optax.adaptive_grad_clip(grad_clip_value, eps=0.01),
-        optax.sgd(learning_rate=learning_rate, momentum=0.95, nesterov=True),
-        #optax.radam(learning_rate=learning_rate)
+        #optax.sgd(learning_rate=learning_rate, momentum=0.95, nesterov=True),
+        optax.radam(learning_rate=learning_rate)
     )
 
     updater = GradientUpdater(forward_fn.init, loss_fn, optimizer)
@@ -237,12 +249,12 @@ def main():
     w, z = a
     num_steps, rng, params, opt_state = updater.init(rng1, w[0, :, :, :])
 
-    params_multi_device = params
-    opt_state_multi_device = opt_state
+    params_multi_device = replicate(params, num_devices)
+    opt_state_multi_device = replicate(opt_state, num_devices)
     num_steps_replicated = replicate(num_steps, num_devices)
     rng_replicated = rng
 
-    fn_update = jax.pmap(updater.update, axis_name="i", in_axes=(0, None, None, None, 0, 0), out_axes=(0, None, None, None, 0))
+    fn_update = jax.pmap(updater.update, axis_name="i", in_axes=(0, None, 0, 0, 0, 0), out_axes=(0, None, 0, 0, 0))
 
     logging.info('Starting training loop +++++++++++++++')
     for i, (w, z) in zip(range(max_steps), train_dataset):

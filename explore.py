@@ -24,7 +24,7 @@ def load_images_from_folder(folder):
         img = cv2.imread(os.path.join(folder, filename))
         if img is not None:
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            i = cv2.resize(img_rgb, (384, 384), interpolation=cv2.INTER_CUBIC)
+            i = cv2.resize(img_rgb, (128, 128), interpolation=cv2.INTER_CUBIC)
             i = cv2.normalize(i, None, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
             images.append(np.array(i, dtype=np.float32))
 
@@ -124,7 +124,7 @@ class ConvNet(hk.Module):
         for i in range(4):
             x = ConvResBlock((3 + i, 3 + i), (1, 1), dropout=dropout)(x)
         
-        x = hk.Conv2D(output_channels=256, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
+        x = hk.Conv2D(output_channels=192, kernel_shape=(3, 3), stride=(1, 1), padding="SAME", w_init=init)(x)
         x = hk.dropout(hk.next_rng_key(), dropout, x)
         x = jnn.gelu(x)
 
@@ -132,7 +132,7 @@ class ConvNet(hk.Module):
             x = ConvResBlock((5 + i, 5 + i), (1, 1), dropout=dropout)(x)
 
         x = hk.Flatten()(x)
-        x = hk.Linear(128, w_init=init)(x)
+        x = hk.Linear(64, w_init=init)(x)
         x = jnn.gelu(x)
         logits = hk.Linear(1, w_init=init)(x)
         return jnn.sigmoid(logits)
@@ -189,11 +189,11 @@ def replicate(t, num_devices):
 
 
 def main():
-    max_steps = 150
-    dropout = 0.6
+    max_steps = 220
+    dropout = 0.5
     grad_clip_value = 1.0
-    learning_rate = 0.01
-    batch_size = 16
+    learning_rate = 0.0001
+    batch_size = 12
 
     num_devices = jax.local_device_count()
 
